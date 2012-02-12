@@ -18,7 +18,7 @@
                (assert false))
              v))             
          (str-or-tag-or-kv [s]
-           (letfn [(kv? [x]  (substring-of? "=" x))
+           (letfn [(kv?  [x] (substring-of? "=" x))
                    (tag? [x] (.startsWith s "#"))]
              (cond
               (kv? s) (let [toks (.split s "=")

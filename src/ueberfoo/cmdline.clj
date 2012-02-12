@@ -101,6 +101,14 @@
   (let [text (apply concat (map #(concat % " ") words))]
     (parse-text text)))
 
+(defn make-options-vec [options]
+  (cond
+   (nil? options) []
+   (coll? options) (vec options)
+   (= java.lang.String (class (first options))) (vec (.split (first options) " "))
+   :else (do (println "unknown class for options arg" (class options))
+             (assert false))))
+
 
 ;;; file access
 
@@ -124,16 +132,8 @@
           (println "1 entry.")
           (println (str n " entries.")))))))
 
-(defn make-options-vec [options]
-  (cond
-   (nil? options) []
-   (coll? options) (vec options)
-   (= java.lang.String (class (first options))) (vec (.split (first options) " "))
-   :else (do (println "unknown class for options arg" (class options))
-             (assert false))))
-
 (defn file-list-entries [filename & [options]]
-  (let [xs          (:entries (file-load-ueberfoo filename)),
+  (let [xs          (:entries (file-load-ueberfoo filename))
         options-vec (make-options-vec options)
         opt-map     (parse-list-options options-vec)
         filtered    (filter (make-filter opt-map) xs)
@@ -148,11 +148,28 @@
       (if (:verbose opt-map)
         (println (str (count result) "/" (count xs) " entries."))))))
 
+(defn file-delete-entries [filename & [options]]
+  {:pre [(not (empty? options))]}
+  (let [m           (file-load-ueberfoo filename)
+        xs          (:entries m)
+        options-vec (make-options-vec options)
+        opt-map     (parse-list-options options-vec)
+        filtered    (filter (make-filter opt-map) xs)
+        ids         (set (map :id filtered))
+        other-xs    (vec (filter #(not (contains? ids (:id %))) xs))
+        new-m       (update-map m other-xs)]
+    (do
+      (spit filename new-m)
+      (let [n (count ids)]
+        (if (= 1 n)
+          (println "1 entry deleted.")
+          (println (str n " entries deleted.")))))))
+
 
 ;;; invocation
 
 (defn usage []
-  (println (str "USAGE:\n"
+  (println (str "usage:\n"
                 "FILENAME new\n"
                 "FILENAME add TEXT\n"
                 "FILENAME list [options]")))
@@ -160,9 +177,11 @@
 (defn- run-script []
   (let [[filename cmd & r] *command-line-args*]
     (case cmd
-          "new" (file-new filename)
-          "add" (file-add-entry filename r)
-          "list" (file-list-entries filename r)
+          "help"   (usage)
+          "new"    (file-new filename)
+          "add"    (file-add-entry filename r)
+          "list"   (file-list-entries filename r)
+          "delete" (file-delete-entries filename r)
           (usage))))
 
 (run-script)
