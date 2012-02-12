@@ -6,46 +6,15 @@
   (:use [ueberfoo.parsing])
   (:use [ueberfoo.static]))
 
-(defn new-file [filename]
-  (let [m {:format  ueberfoo-format
-           :created (make-timestamp-str)
-           :max-id  0
-           :entries []}]
-    (do
-      (spit filename m)
-      (println (str "created new file " filename ".")))))
 
-(defn load-ueberfoo [filename]
-  (load-string (slurp filename)))
+;;; list transformation
 
-(defn load-entries [filename]
-  (:entries (load-string (slurp filename))))
-
-(defn update-map [m entries]
-  (assoc m
-    :format ueberfoo-format
-    :updated (make-timestamp-str)
-    :max-id (inc (:max-id m))
-    :entries entries))
-
-(defn add-entry [filename words]  
-  (let [text (apply concat (map #(concat % " ") words))
-        m    (load-ueberfoo filename)
-        x    (parse-text text m)
-        out  (update-map m (conj (:entries m) x))]
-    (do
-      (prn x)
-      (spit filename out)
-      (let [n (count (:entries out))]
-        (if (= 1 n)
-          (println "1 entry.")
-          (println (str n " entries.")))))))
-
-(defn make-post-processor [opt-map nr-of-entries]
-  (let [if-reverse (if (:reverse opt-map) reverse identity)
-        offset (if-let [n (:offset opt-map)] n 0)
-        limit  (if-let [n (:limit opt-map)] n nr-of-entries)]
-    (comp vec #(take limit (drop offset %)) if-reverse)))
+(defn make-list-post-processor [opt-map]
+  {:pre [(contains? opt-map :nr-of-entries)]}
+  (let [order-fn (if (:reverse opt-map) reverse identity)
+        offset   (if-let [n (:offset opt-map)] n 0)
+        limit    (if-let [n (:limit opt-map)] n (:nr-of-entries opt-map))]
+    (comp vec #(take limit (drop offset %)) order-fn)))
 
 (defn format-value [v]
   (if (set? v)
@@ -53,7 +22,7 @@
                           (str "#" (name x) " ")
                           (str x " ")))]
       (.trim (apply str xs)))
-   v))
+    v))
 
 (defn make-entry-formatter [opt-map]
   (if (:clj opt-map)
@@ -98,7 +67,7 @@
               (or (empty? f-kvs)
                   (apply l-and
                          (for [e f-kvs]
-                           (let [kv (first e)
+                           (let [kv      (first e)
                                  test-k  (get kv 0)
                                  test-v  (get kv 1)
                                  entry-v (test-k entry)]
@@ -112,26 +81,72 @@
                              (all-tags entry)
                              (all-kvs entry)))))))
 
-(defn list-entries [filename & [options]]
-  (let [xs (:entries (load-ueberfoo filename)),
-        options-vec
-        (cond
-         (nil? options) []
-         (coll? options) (vec options)
-         (= java.lang.String (class (first options))) (vec (.split (first options) " "))
-         :else (do (println "unknown class for options arg" (class options))
-                   (assert false))),
+
+;;; non-io parts of file access functions
+
+(defn update-map [m entries]
+  (assoc m
+    :format ueberfoo-format
+    :updated (make-timestamp-str)
+    :max-id (inc (:max-id m))
+    :entries entries))
+
+(defn make-new-file-map []
+  {:format  ueberfoo-format
+   :created (make-timestamp-str)
+   :max-id  0
+   :entries []})
+
+(defn make-new-entry [words]
+  (let [text (apply concat (map #(concat % " ") words))]
+    (parse-text text)))
+
+
+;;; file access
+
+(defn file-load-ueberfoo [filename]
+  (load-string (slurp filename)))
+
+(defn file-new [filename]
+  (do
+    (spit filename (make-new-file-map))
+    (println (str "created new file " filename "."))))
+
+(defn file-add-entry [filename words]
+  (let [m     (file-load-ueberfoo filename)
+        x     (assoc (make-new-entry words) :id (inc (:max-id m)))
+        new-m (update-map m (conj (:entries m) x))]
+    (do
+      (prn x)
+      (spit filename new-m)
+      (let [n (count (:entries new-m))]
+        (if (= 1 n)
+          (println "1 entry.")
+          (println (str n " entries.")))))))
+
+(defn make-options-vec [options]
+  (cond
+   (nil? options) []
+   (coll? options) (vec options)
+   (= java.lang.String (class (first options))) (vec (.split (first options) " "))
+   :else (do (println "unknown class for options arg" (class options))
+             (assert false))))
+
+(defn file-list-entries [filename & [options]]
+  (let [xs          (:entries (file-load-ueberfoo filename)),
+        options-vec (make-options-vec options)
         opt-map     (parse-list-options options-vec)
-        fxs         (filter (make-filter opt-map) xs)
-        sel         (map (make-selector opt-map) fxs)
-        res         ((make-post-processor opt-map (count sel)) sel)
-        eform       (make-entry-formatter opt-map)
+        filtered    (filter (make-filter opt-map) xs)
+        selected    (map (make-selector opt-map) filtered)
+        opt-map-n   (assoc opt-map :nr-of-entries (count selected))
+        result      ((make-list-post-processor opt-map-n) selected)
+        xform       (make-entry-formatter opt-map)
         one-liners? (and (not (:all opt-map)) (= 1 (count (:select opt-map))))
         printer     (if one-liners? print println)]
     (do
-      (doseq [r res] (printer (eform r)))
+      (doseq [x result] (printer (xform x)))
       (if (:verbose opt-map)
-        (println (str (count res) "/" (count xs) " entries."))))))
+        (println (str (count result) "/" (count xs) " entries."))))))
 
 
 ;;; invocation
@@ -145,9 +160,9 @@
 (defn- run-script []
   (let [[filename cmd & r] *command-line-args*]
     (case cmd
-          "new" (new-file filename)
-          "add" (add-entry filename r)
-          "list" (list-entries filename r)
+          "new" (file-new filename)
+          "add" (file-add-entry filename r)
+          "list" (file-list-entries filename r)
           (usage))))
 
 (run-script)

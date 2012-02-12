@@ -6,56 +6,58 @@
   (:use [ueberfoo.genfuns]))
 
 (defn parse-list-options [options-vec]
-  "collects options in a map"
+  "returns an option map"
   (when-not (nil? options-vec)
     (letfn
         [(parse-int [x] (Integer/parseInt x))
-;;         (parse-date [x] (.parse (java.text.SimpleDateFormat. "yyyy-MM-dd HH:mm:ss") x))
-         (with-not-empty-for [e x k]
-           (if (empty? x)
+;;       (parse-date [x] (.parse (java.text.SimpleDateFormat. "yyyy-MM-dd HH:mm:ss") x))
+         (assert-non-empty-v [k v]
+           (if (empty? v)
              (do
                (println (str "expected value for " k))
                (assert false))
-             e))
+             v))             
          (str-or-tag-or-kv [s]
-           (cond
-            (substring-of? "=" s)
-            (let [tks (.split s "=")
-                  k   (tag-str-to-keyword (get tks 0))]
-              (if (= (count tks) 1) ;; then key existence suffices
-                {k :any}
-                {k (get tks 1)})),
-            (.startsWith s "#") (tag-str-to-keyword s)
-            :else s))
+           (letfn [(kv? [x]  (substring-of? "=" x))
+                   (tag? [x] (.startsWith s "#"))]
+             (cond
+              (kv? s) (let [toks (.split s "=")
+                            k    (tag-str-to-keyword (get toks 0))]
+                        (if (= (count toks) 1) ;; then key existence suffices
+                          {k :any}
+                          {k (get toks 1)}))
+              (tag? s) (tag-str-to-keyword s)
+              :str s)))
          (read-next [m [x & xs]]                     
            #(cond
-             ;; selection
+             ;; key selection
              (or (= "-s" x) (= "--select" x))  (conj-with m :select keyword [] xs)
              (or (= "-*" x) (= "--all" x))     (read-next (assoc m :all true) xs)
-             ;; filter
+             ;; entry filter
              (or (= "-f" x) (= "--filter" x))  (conj-with m :filter str-or-tag-or-kv [] xs)
-;;             (or (= "-a" x) (= "--after" x))   (assoc-next-with m :after parse-date xs)
-;;             (or (= "-b" x) (= "--before" x))  (assoc-next-with m :before parse-date xs)
-             ;; output control
+;;           (or (= "-a" x) (= "--after" x))   (assoc-next-with m :after parse-date xs)
+;;           (or (= "-b" x) (= "--before" x))  (assoc-next-with m :before parse-date xs)
+             ;; result list post processing
              (or (= "-r" x) (= "--reverse" x)) (read-next (assoc m :reverse true) xs)
              (or (= "-l" x) (= "--limit" x))   (assoc-next-with m :limit parse-int xs)
              (or (= "-o" x) (= "--offset" x))  (assoc-next-with m :offset parse-int xs)
              ;; output format
-             (or (= "-v" x) (= "--verbose" x)) (read-next (assoc m :verbose true) xs)
              (or (= "-c" x) (= "--clj" x))     (read-next (assoc m :clj true) xs)
              (or (= "-d" x) (= "--display" x)) (assoc-next-with m :display identity xs)
+             ;; additional output control
+             (or (= "-v" x) (= "--verbose" x)) (read-next (assoc m :verbose true) xs)
+             ;;
              (empty? x) m
              :else (do (println "unknown option: " x) (assert false))))
          (conj-with [m k f tmp [x & xs]]
-           "associate with key a set of items (f x)"
+           "associate with key k a set of items (f x)"
            #(cond
-             (nil? x) (with-not-empty-for (assoc m k tmp) tmp k),
-             (.startsWith x "-")
-             (with-not-empty-for (read-next (assoc m k tmp) (vec (cons x xs))) tmp k),
-             :else (conj-with m k f (conj tmp (f x)) xs)))
+             (nil? x)            (assoc m k (assert-non-empty-v k tmp))
+             (.startsWith x "-") (read-next (assoc m k (assert-non-empty-v k tmp)) (vec (cons x xs)))
+             :else               (conj-with m k f (conj tmp (f x)) xs)))
          (assoc-next-with [m k f [x & xs]]
            "associate key k in map m with (f x)"
-           #(with-not-empty-for (read-next (assoc m k (f x)) xs) x k))]
+           #(read-next (assoc m k (f (assert-non-empty-v k x))) xs))]
       (trampoline
        read-next
        {:select [:text], :display "v"} ;; default
@@ -67,15 +69,12 @@
     tags
     (conj tags (keyword (apply str v)))))
 
-(defn parse-text [s m]
-  {:pre [(not (nil? (:max-id m)))]}
-  "parses string s as new entry. map meta has to provide meta info,
-   currently only max-id needed."
+(defn parse-text [s]
+  "parses string s as new entry sans :id"
   (let [xs (vec s),
         make-entry 
         (fn [text-vec tags kvs]
-          (let [base {:id (inc (:max-id m))
-                      :created (make-timestamp-str)
+          (let [base {:created (make-timestamp-str)
                       :text (.trim (apply str text-vec))}
                 with-tags (assoc-if (not (nil? tags)) base :tags tags)
                 with-kvs  (merge with-tags (apply hash-map kvs))]
