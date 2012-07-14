@@ -1,16 +1,14 @@
 ;; created 2012-01-16 00:43
-;; author hbeck
+;; author Harald Beck
 
 (ns ueberfoo.parsing
-  (:use [ueberfoo.static])
-  (:use [ueberfoo.genfuns]))
+  (:use [ueberfoo.common]))
 
 (defn parse-list-options [options-vec]
   "returns an option map"
   (when-not (nil? options-vec)
     (letfn
         [(parse-int [x] (Integer/parseInt x))
-;;       (parse-date [x] (.parse (java.text.SimpleDateFormat. "yyyy-MM-dd HH:mm:ss") x))
          (assert-non-empty-v [k v]
            (if (empty? v)
              (do
@@ -35,8 +33,6 @@
              (or (= "-*" x) (= "--all" x))     (read-next (assoc m :all true) xs)
              ;; entry filter
              (or (= "-f" x) (= "--filter" x))  (conj-with m :filter str-or-tag-or-kv [] xs)
-;;           (or (= "-a" x) (= "--after" x))   (assoc-next-with m :after parse-date xs)
-;;           (or (= "-b" x) (= "--before" x))  (assoc-next-with m :before parse-date xs)
              ;; result list post processing
              (or (= "-r" x) (= "--reverse" x)) (read-next (assoc m :reverse true) xs)
              (or (= "-l" x) (= "--limit" x))   (assoc-next-with m :limit parse-int xs)
