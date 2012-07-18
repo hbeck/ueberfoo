@@ -1,42 +1,123 @@
-;; created 2012-01-16 00:43
-;; author Harald Beck
+;; created 2012-01-16
 
 (ns ueberfoo.parsing
   (:use [ueberfoo.common]))
 
-(defn parse-list-options [options-vec]
-  "returns an option map"
-  (when-not (nil? options-vec)
+;;; parse entry helpers
+
+(defn mk-key-from-vc [str-vc]
+  "[\"a\" \"b\"] --> :ab"
+  (if (empty? str-vc)
+    (do
+      (prn "empty string after #")
+      (assert false))
+    (keyword (apply str str-vc))))
+
+(defn mk-entry [m]
+  (let [tags (:tags m)]    
+    (merge {:created (timestamp-str)
+            :text    (.trim (apply str (:text-vc m)))}
+           (when-not (empty? tags) {:tags tags})
+           (apply hash-map (:kv-vc m)))))
+
+(defn add-curr-tag [m]
+  (merge-with conj m {:tags (mk-key-from-vc (:curr-k-vc m))}))
+
+(defn init-prs-val [m]
+  "adds current key to kv-vc and prepares empty vc for value parsing"
+    (merge-with conj
+                (assoc m :curr-v-vc [])
+                {:kv-vc (mk-key-from-vc (:curr-k-vc m))}))
+
+(defn add-curr-val [m]
+  "add current value to kv-vc"
+  (let [v (apply str (assert-non-empty (:curr-v-vc m)))]
+    (merge-with conj m {:kv-vc v})))
+
+(defn conj-to [m k v]
+  (merge-with conj m {k v}))
+
+;;; parse entry
+
+(defn parse-entry [s]
+  "parses string s and new entry map (sans :id)"
+  (letfn
+      ;; x is the current char, map m holds the context
+      ;; recognizing "" means end of parsing
+      [(prs-txt [m [x & xs]]
+         ;;withing regular text: built in :text-vc
+         #(case (str x)
+                ""  (mk-entry m)
+                "#" (prs-key (assoc m :curr-k-vc []) xs)
+                    (prs-txt (conj-to m :text-vc x) xs)))
+       ;
+       (prs-key [m [x & xs]]
+         ;;within tag or key part of key-value pair: built in curr-k-vc
+         #(case (str x)
+                ""  (mk-entry (add-curr-tag m))
+                "=" (prs-val  (init-prs-val m) xs)
+                " " (prs-txt  (add-curr-tag m) xs)
+                    (prs-key  (conj-to m :curr-k-vc x) xs)))
+       ;
+       (prs-val [m [x & xs]]
+         ;; within value part of key-value pair: built in curr-v-vc
+         #(case (str x)                
+                ""  (mk-entry (add-curr-val m))
+                " " (prs-txt  (add-curr-val m) xs)
+                    (prs-val  (conj-to m :curr-v-vc x) xs)))]         
+    ;; start parsing
+    (trampoline
+      prs-txt
+      {:text-vc [], :tags #{}, :kv-vc []} ;; m
+      (vec s)))) ;; [x & xs]
+
+
+;;; parse list options helpers
+
+; optimistic tests
+(defn- kv? [x] (substring-of? "=" x))
+(defn- tag? [x] (.startsWith x "#"))
+
+(defn mk-kv [s]
+  (let [toks (.split s "=")
+        k    (keyword-from-tag-str (get toks 0))
+        v    (if (= (count toks) 1)
+               :* 
+               (get toks 1))]
+    {k v}))
+
+(defn mk-token [s]
+  (cond
+   (kv? s)  (mk-kv s)                ;; "#k=v" --> {:k "v"}
+   (tag? s) (keyword-from-tag-str s) ;; "#t"   --> :t
+   :else    s))                      ;; "s"    --> "s"
+
+(def default-options
+  {:select [:text], :display "v"})
+
+;;; parse list options
+
+; note: since forward pointers are not possible, mutually recursive
+; functions (for trampoline) must be defined within the same letfn.
+
+(defn parse-list-options [options-vc]
+  {:pre [(true? (or (empty? options-vc) (reduce l-and (map string? options-vc))))]}
+  "options-vc: vector of arguments (strings).
+   returns map representation."
+  (when-not (nil? options-vc)
     (letfn
-        [(parse-int [x] (Integer/parseInt x))
-         (assert-non-empty-v [k v]
-           (if (empty? v)
-             (do
-               (println (str "expected value for " k))
-               (assert false))
-             v))             
-         (str-or-tag-or-kv [s]
-           (letfn [(kv?  [x] (substring-of? "=" x))
-                   (tag? [x] (.startsWith s "#"))]
-             (cond
-              (kv? s) (let [toks (.split s "=")
-                            k    (tag-str-to-keyword (get toks 0))]
-                        (if (= (count toks) 1) ;; then key existence suffices
-                          {k :any}
-                          {k (get toks 1)}))
-              (tag? s) (tag-str-to-keyword s)
-              :str s)))
-         (read-next [m [x & xs]]                     
+        [(read-next [m [x & xs]]
+           "read next option and determine respective next state"
            #(cond
-             ;; key selection
-             (or (= "-s" x) (= "--select" x))  (conj-with m :select keyword [] xs)
-             (or (= "-*" x) (= "--all" x))     (read-next (assoc m :all true) xs)
              ;; entry filter
-             (or (= "-f" x) (= "--filter" x))  (conj-with m :filter str-or-tag-or-kv [] xs)
-             ;; result list post processing
+             (or (= "-f" x) (= "--filter" x))  (conj-to-with m :filter mk-token [] xs)
+             ;; filtered list post processing
              (or (= "-r" x) (= "--reverse" x)) (read-next (assoc m :reverse true) xs)
              (or (= "-l" x) (= "--limit" x))   (assoc-next-with m :limit parse-int xs)
              (or (= "-o" x) (= "--offset" x))  (assoc-next-with m :offset parse-int xs)
+             ;; key selection
+             (or (= "-s" x) (= "--select" x))  (conj-to-with m :select keyword [] xs)
+             (or (= "-*" x) (= "--all" x))     (read-next (assoc m :all true) xs)
              ;; output format
              (or (= "-c" x) (= "--clj" x))     (read-next (assoc m :clj true) xs)
              (or (= "-d" x) (= "--display" x)) (assoc-next-with m :display identity xs)
@@ -45,56 +126,16 @@
              ;;
              (empty? x) m
              :else (do (println "unknown option: " x) (assert false))))
-         (conj-with [m k f tmp [x & xs]]
-           "associate with key k a set of items (f x)"
+         ;
+         (conj-to-with [m k f vc [x & xs]]
+           "in the value for k, conj (f x)"
            #(cond
-             (nil? x)            (assoc m k (assert-non-empty-v k tmp))
-             (.startsWith x "-") (read-next (assoc m k (assert-non-empty-v k tmp)) (vec (cons x xs)))
-             :else               (conj-with m k f (conj tmp (f x)) xs)))
+             (empty? x)          (assoc m k (assert-non-empty vc))
+             (.startsWith x "-") (read-next (assoc m k (assert-non-empty vc)) (vec (cons x xs)))
+             :else               (conj-to-with m k f (conj vc (f x)) xs)))
+         ;
          (assoc-next-with [m k f [x & xs]]
            "associate key k in map m with (f x)"
-           #(read-next (assoc m k (f (assert-non-empty-v k x))) xs))]
-      (trampoline
-       read-next
-       {:select [:text], :display "v"} ;; default
-       options-vec))))
-
-(defn conj-tag [tags v]
-  "appends keyword for given vec if it is not empty"
-  (if (empty? v)
-    tags
-    (conj tags (keyword (apply str v)))))
-
-(defn parse-text [s]
-  "parses string s as new entry sans :id"
-  (let [xs (vec s),
-        make-entry 
-        (fn [text-vec tags kvs]
-          (let [base {:created (make-timestamp-str)
-                      :text (.trim (apply str text-vec))}
-                with-tags (assoc-if (not (nil? tags)) base :tags tags)
-                with-kvs  (merge with-tags (apply hash-map kvs))]
-            with-kvs))]
-    (letfn
-        [(normal-text [text-vec tags kvs [x & xs]]
-           #(case x
-                  nil (make-entry  text-vec          tags kvs)
-                  \#  (within-key  text-vec          tags kvs xs, [])
-                      (normal-text (conj text-vec x) tags kvs xs)))
-         (within-key [text-vec tags kvs [x & xs], key-vec]
-           #(case x
-                  nil (make-entry   text-vec (conj-tag tags key-vec) kvs)
-                  \=  (within-value text-vec tags                    kvs xs,
-                                    (keyword (apply str key-vec)) [])
-                  \   (normal-text  text-vec (conj-tag tags key-vec) kvs xs)
-                      (within-key   text-vec tags                    kvs xs,
-                                    (conj key-vec x))))
-         (within-value [text-vec tags kvs [x & xs], key value-vec]
-           #(case x
-                  nil (assoc-if (not (empty? value-vec)),
-                                (make-entry text-vec tags kvs),
-                                key (apply str value-vec))                                
-                  \   (normal-text  text-vec tags (conj kvs key (apply str value-vec)) xs)
-                      (within-value text-vec tags kvs xs, key (conj value-vec x))))]
-      (trampoline normal-text [] #{} [] xs))))
-
+           #(read-next (assoc m k (f (assert-non-empty x))) xs))]
+      ;; start parsing
+      (trampoline read-next default-options options-vc))))
