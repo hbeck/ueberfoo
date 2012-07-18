@@ -189,7 +189,7 @@
       (cond
        (zero? n-del) (println " entries deleted.")
        (= 1 n-del)   (println " entry deleted:")
-       :else         (println " entires deleted:"))
+       :else         (println " entries deleted:"))
       (doseq [x (:selected in)] (println ((:formatter in) x))))))
 
 ;;; invocation
