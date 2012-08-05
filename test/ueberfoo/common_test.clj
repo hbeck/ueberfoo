@@ -2,6 +2,16 @@
   (:use [ueberfoo.common])
   (:use [clojure.test]))
 
+(deftest test-year-of
+  (is (= 2011 (year-of (.parse sdf-date "2011-03-14"))))
+  (is (= 2012 (year-of (.parse sdf-date "2012-03-14"))))
+  (is (= 2099 (year-of (.parse sdf-date "2099-03-14")))))
+
+(deftest test-month-of
+  (is (= 1  (month-of (.parse sdf-date "2011-01-14"))))
+  (is (= 3  (month-of (.parse sdf-date "2011-03-14"))))
+  (is (= 12 (month-of (.parse sdf-date "2011-12-14")))))
+
 (deftest test-l-and
   (is (= (l-and []) true))
   (is (= (l-and nil) false))

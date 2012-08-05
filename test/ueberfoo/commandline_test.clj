@@ -194,3 +194,6 @@
                     (mk-new-entry ["#foo" "asdf" "#bar" "#as=df" "#gh=#ij"])
                     :text :tags)))
 
+(deftest test-mk-entry-path
+  (is (= "/tmp/2012/8/id42.clj"
+         (mk-entry-path "/tmp" 2012 8 42))))

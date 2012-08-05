@@ -1,9 +1,38 @@
 ;; created 2012-01-16
 
-(ns ueberfoo.common)
+(ns ueberfoo.common
+  (:import [java.util Date Calendar])
+  (:import [java.io File]))
 
 (def sdf-date-time (java.text.SimpleDateFormat. "yyyy-MM-dd HH:mm:ss"))
 (def sdf-date (java.text.SimpleDateFormat. "yyyy-MM-dd"))
+
+(defn year-of [^Date date]
+  (let [cal (Calendar/getInstance)]
+    (do
+      (.setTime cal date)
+      (.get cal (Calendar/YEAR)))))
+
+(defn month-of [^Date date]
+  (let [cal (Calendar/getInstance)]
+    (do
+      (.setTime cal date)
+      (inc (.get cal (Calendar/MONTH))))))
+
+(defn empty-dir? [dir]
+  (let [c (class dir)
+        f (cond
+           (= c java.io.File) dir
+           (= c java.lang.String) (File. dir)
+           :else nil)]
+    (when (and (not (nil? f)) (.isDirectory f))
+      (zero? (count (.list f))))))
+
+(defn subdirs [dir]
+  (filter #(.isDirectory %) (.listFiles dir)))
+
+(defn hasSubdirs? [dir]
+  (not (zero? (count (subdirs dir)))))
 
 (defn l-and
   "logical and"

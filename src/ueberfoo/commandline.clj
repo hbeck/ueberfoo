@@ -2,7 +2,11 @@
 
 (ns ueberfoo.commandline
   (:use [ueberfoo.common])
-  (:use [ueberfoo.parsing]))
+  (:use [ueberfoo.parsing])
+  (:use [clojure.set :only [difference]])
+  (:import [java.util Date])
+  (:import [java.io File]))
+
 
 ;;; list transformation
 
@@ -95,16 +99,11 @@
 
 ;;; non-IO parts of file access functions
 
-(defn mk-new-file-map []
+(defn mk-new-db-map []
   {:created (timestamp-str)
-   :max-id  0
-   :entries []})
-
-(defn update-map [m entries]
-  (assoc m
-    :updated (timestamp-str)
-    :max-id  (inc (:max-id m))
-    :entries entries))
+   :format  {:name "ueberfoo",
+             :version "0.0.3"}
+   :max-id  0})
 
 (defn mk-new-entry [words]
   "words: vector of strings. returns entry sans :id."
@@ -125,72 +124,130 @@
 (defn load-from-file [filename]
   (load-string (slurp filename)))
 
-(defn file-new [filename]
-  (do
-    (spit filename (mk-new-file-map))
-    (println (str "created new file " filename "."))))
+(defn db-path [dirname]
+  "db.clj holds the meta information.
+   return full path str to db.clj"  
+  (str dirname "/db.clj"))
 
-(defn file-add-entry [filename words]
-  (let [m     (load-from-file filename)
-        entry (assoc (mk-new-entry words) :id (inc (:max-id m)))
-        new-m (assoc m
-                :updated (timestamp-str)
-                :max-id  (inc (:max-id m))
-                :entries (conj (:entries m) entry))]
+(defn db-new [dirname]
+  (do
+    (.mkdir (File. dirname))
+    (spit (db-path dirname) (mk-new-db-map))
+    (println (str "created new db " dirname "."))))
+
+(defn mk-entry-subdirs [dirname date]
+  "creates year/month subdirs if necessary and returns full path,
+   e.g., /home/john/dbname/2012/8"
+  (let [y (year-of date)
+        m (month-of date)        
+        s (str dirname "/" y "/" m)]
+  (do
+    (.mkdirs (File. s))
+    s)))
+
+(defn mk-entry-filename [id]
+  (str "id" id ".clj"))
+
+(defn mk-entry-path [dirname year month id]
+  "[dirname]/[year]/[month]/id[id].clj"
+  (str dirname "/" year "/" month "/" (mk-entry-filename id)))  
+
+(defn db-add-entry [dirname words]
+  (let [db     (load-from-file (db-path dirname))
+        id     (inc (:max-id db))
+        entry  (assoc (mk-new-entry words) :id id)
+        new-db (assoc db
+                 :updated (timestamp-str)
+                 :max-id  id)
+        subdir (mk-entry-subdirs dirname (Date.))]
     (do
-      (prn entry)
-      (spit filename new-m)
-      (let [n (count (:entries new-m))]
-        (if (= 1 n)
-          (println "1 entry.")
-          (println (str n " entries.")))))))
+      (prn entry)      
+      (spit (db-path dirname) new-db)
+      (spit (str subdir "/" (mk-entry-filename id)) entry))))
+
+(defn load-all-entries [dirname]  
+  (let [dir         (clojure.java.io/file dirname)
+        all-files   (file-seq dir)
+        entry-files (filter #(let [name (.getName %)]
+                               (and (.startsWith name "id") (.endsWith name ".clj")))
+                            all-files)]
+    (map load-from-file entry-files)))
+
 
 ;; common part of list and delete
-(defn mk-filter-struct [filename & [options]]
+(defn mk-filter-ctxt [dirname & [options]]
   ;; 'result' stems from vertical filtering
   ;; 'selected' stems from horizontal (key selection) filtering of 'result'
-  (let [file-map    (load-from-file filename)
-        entries     (:entries file-map)
+  (let [db          (load-from-file (db-path dirname))
+        entries     (load-all-entries dirname)
         opt-map     (parse-list-options (mk-options-vec options))
         filtered    (filter (mkfn-filter opt-map) entries) ;; -f
         opt-map-n   (assoc opt-map :nr-of-entries (count filtered))
         result      ((mkfn-list-post-filter opt-map-n) filtered) ;; -l -r -o
         selected    (map (mkfn-selector opt-map) result ) ;; -s -*
         formatter   (mkfn-entry-formatter opt-map)] ;; -c -d
-    {:file-map file-map
+    {:db db
      :entries entries
      :opt-map opt-map
      :result result
      :selected selected
      :formatter formatter}))
 
-(defn file-list-entries [filename & [options]]
-  (let [in          (mk-filter-struct filename options)
-        opt-map     (:opt-map in)        
+(defn db-list-entries [dirname & [options]]
+  (let [ctxt        (mk-filter-ctxt dirname options)
+        opt-map     (:opt-map ctxt)        
         one-liners? (and (not (:all opt-map)) (= 1 (count (:select opt-map))))
         printer     (if one-liners? print println)]
     (do
-      (doseq [x (:selected in)] (printer ((:formatter in) x)))
+      (doseq [x (:selected ctxt)] (printer ((:formatter ctxt) x)))
       (if (:verbose opt-map) ;; -v
-        (println (str (count (:selected in)) "/" (count (:entries in)) " entries."))))))
+        (println (str (count (:selected ctxt)) "/" (count (:entries ctxt)) " entries."))))))
 
-(defn file-delete-entries [filename options]
-  {:pre [(not (empty? options))]}
-  (let [in           (mk-filter-struct filename options)
-        to-delete    (:result in) ;; do not use :selected (entry equality!)
-        entries2keep (vec (filter #(not (contained-in? % to-delete)) (:entries in)))
-        n-del        (- (count (:entries in)) (count entries2keep))
-        new-m        (assoc (:file-map in)
-                       :updated (timestamp-str)
-                       :entries entries2keep)]
+(defn next-unlisted-subdir [dir listed]
+  (first (difference (set (subdirs dir)) (set listed))))
+
+(defn delete-empty-subdirs [dirname]
+  "search to leaf dir (= sans subdirs), and delete if empty; recur.
+   returns deleted files"
+  (loop [dir (File. dirname), to-decide [], kept [], deleted []]
+    (if (nil? dir)
+      deleted
+      (if (hasSubdirs? dir)
+        (let [subdir (next-unlisted-subdir dir (concat to-decide kept))]
+          (if (nil? subdir) ;; all subdirs visited, ie cannot delete this one
+            (recur (first to-decide) (rest to-decide) (conj kept dir) deleted)
+            (recur subdir (cons dir to-decide) kept deleted)))
+        (if (empty-dir? dir)
+          (do
+            (.delete dir)
+            (recur (first to-decide) (rest to-decide) kept (conj deleted dir)))
+          (recur (first to-decide) (rest to-decide) (conj kept dir) deleted))))))
+
+(defn delete-entry [dirname entry]
+  (let [date       (.parse sdf-date-time (:created entry))
+        year       (year-of date)
+        month      (month-of date)
+        entry-path (mk-entry-path dirname year month (:id entry))]
     (do
-      (spit filename new-m)
-      (print n-del)
+      (.delete (File. entry-path)))))
+
+(defn db-delete-entries [dirname options]
+  {:pre [(not (empty? options))]}
+  (let [ctxt           (mk-filter-ctxt dirname options)
+        entries-to-del (:result ctxt) ;; do not use :selected (entry equality!)
+        n              (count entries-to-del)
+        new-db         (assoc (:db ctxt)
+                         :updated (timestamp-str))]
+    (do
+      (spit (db-path dirname) new-db)
+      (dorun (map #(delete-entry dirname %) entries-to-del))
+      (delete-empty-subdirs dirname)
+      (print n)
       (cond
-       (zero? n-del) (println " entries deleted.")
-       (= 1 n-del)   (println " entry deleted:")
-       :else         (println " entries deleted:"))
-      (doseq [x (:selected in)] (println ((:formatter in) x))))))
+       (zero? n) (println " entries deleted.")
+       (= 1 n)   (println " entry deleted:")
+       :else     (println " entries deleted:"))
+      (doseq [x (:selected ctxt)] (println ((:formatter ctxt) x))))))
 
 ;;; invocation
 
@@ -198,10 +255,10 @@
   (println
    (str "usage:\n\n"
                 
-        "FILENAME new\n"
-        "FILENAME add TEXT\n"
-        "FILENAME list [OPTIONS]\n"
-        "FILENAME delete OPTIONS\n\n"
+        "DIR new\n"
+        "DIR add TEXT\n"
+        "DIR list [OPTIONS]\n"
+        "DIR delete OPTIONS\n\n"
                 
         "OPTIONS\n"
         "filtering:\n"
@@ -223,13 +280,13 @@
          "-v  --verbose")))
 
 (defn run-script []
-  (let [[filename cmd & args] *command-line-args*]
+  (let [[dirname cmd & args] *command-line-args*]
     (case cmd
           "help"   (usage)
-          "new"    (file-new filename)
-          "add"    (file-add-entry filename args)
-          "list"   (file-list-entries filename args)
-          "delete" (file-delete-entries filename args)
+          "new"    (db-new dirname)
+          "add"    (db-add-entry dirname args)
+          "list"   (db-list-entries dirname args)
+          "delete" (db-delete-entries dirname args)
           (usage))))
 
 (run-script)
