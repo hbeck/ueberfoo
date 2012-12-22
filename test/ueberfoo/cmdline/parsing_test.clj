@@ -1,6 +1,6 @@
-(ns ueberfoo.parsing-test
-  (:use [ueberfoo.parsing])
-  (:use [ueberfoo.common])
+(ns ueberfoo.cmdline.parsing-test  
+  (:use [ueberfoo.cmdline.parsing])
+  (:use [ueberfoo.common common maps])
   (:use [clojure.test]))
 
 (deftest test-mk-key-from-vc
@@ -141,4 +141,3 @@
                                        (str "-v -* -s foo bar -o 3 -c -d kv -r "
                                             "-l 3 -f #foo=bar foo #bar")
                                         " ")))))))
-  

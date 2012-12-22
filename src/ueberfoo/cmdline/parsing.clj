@@ -1,7 +1,7 @@
 ;; created 2012-01-16
 
-(ns ueberfoo.parsing
-  (:use [ueberfoo.common]))
+(ns ueberfoo.cmdline.parsing
+  (:use [ueberfoo.common common date strings conversion]))
 
 ;;; parse entry helpers
 
@@ -72,9 +72,9 @@
       (vec s)))) ;; [x & xs]
 
 
-;;; parse list options helpers
+;;parse list options helpers
 
-; optimistic tests
+;;optimistic tests
 (defn- kv? [x] (substring-of? "=" x))
 (defn- tag? [x] (.startsWith x "#"))
 
@@ -88,17 +88,14 @@
 
 (defn mk-token [s]
   (cond
-   (kv? s)  (mk-kv s)                ;; "#k=v" --> {:k "v"}
-   (tag? s) (keyword-from-tag-str s) ;; "#t"   --> :t
-   :else    s))                      ;; "s"    --> "s"
+   (kv? s)  (mk-kv s)                ;;"#k=v" --> {:k "v"}
+   (tag? s) (keyword-from-tag-str s) ;;"#t"   --> :t
+   :else    s))                      ;;"s"    --> "s"
 
 (def default-options
   {:select [:text], :display "v"})
 
-;;; parse list options
-
-; note: since forward pointers are not possible, mutually recursive
-; functions (for trampoline) must be defined within the same letfn.
+;;parse list options
 
 (defn parse-list-options [options-vc]
   {:pre [(true? (or (empty? options-vc) (reduce l-and (map string? options-vc))))]}
@@ -109,8 +106,11 @@
         [(read-next [m [x & xs]]
            "read next option and determine respective next state"
            #(cond
-             ;; entry filter
+             ;;entry filter
              (or (= "-f" x) (= "--filter" x))  (conj-to-with m :filter mk-token [] xs)
+             ;; ("-t" x)                       (read-next (assoc m :from (parse-date "today")) xs)
+             ;; ("--from" x)                   (assoc-next-with m :from parse-date xs)
+             ;; ("--to" x)                     (assoc-next-with m :to parse-date xs)
              ;; filtered list post processing
              (or (= "-r" x) (= "--reverse" x)) (read-next (assoc m :reverse true) xs)
              (or (= "-l" x) (= "--limit" x))   (assoc-next-with m :limit parse-int xs)
