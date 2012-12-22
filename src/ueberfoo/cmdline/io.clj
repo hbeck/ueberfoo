@@ -65,19 +65,3 @@
         entries (load-all-entries dirname)]
     (find-first #(= (:id %)) entries)))
 
-;; (defn db-add-to-entry [dirname args]
-;;   "args: first string has to be id"
-;;   (let [db        (load-from-file (db-path dirname))
-;;         old-entry (db-get-entry-by-id dirname args)
-;;         new-entry (mk-new-entry words)
-;;         new-db    (assoc db :updated (timestamp-str))
-;;         subdir    (mk-entry-subdirs
-;;                    dirname (parse-date (old-entry :created)))
-;;         entry     (merge-entries old-entry new-entry)]
-;;     (do
-;;       (prn entry)      
-;;       (spit (db-path dirname) new-db)
-;;       ;; delete old file
-;;       (spit (str subdir "/" (mk-entry-filename id)) entry))))
-
-

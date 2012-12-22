@@ -140,7 +140,6 @@
           "help"   (usage)
           "new"    (db-new dirname)
           "add"    (db-add-entry dirname args)
-          ;;"add-to" (db-add-to-entry dirname args)
           "list"   (db-list-entries dirname args)
           "delete" (db-delete-entries dirname args)
           "query"  (query dirname args)
